@@ -1,0 +1,225 @@
+<!doctype html>
+<!--
+Copyright (c) 2014, Lars Schneider. All rights reserved.
+Copyright (c) 2014, Brandon Jones. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+  * Redistributions of source code must retain the above copyright notice, this
+    list of conditions and the following disclaimer.
+  * Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+-->
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>three.js WebVR Demo</title>
+    <style>
+      canvas {
+        width: 100% !important;
+        height: 100% !important;
+        position: absolute;
+        top: 0;
+        left: 0;
+      }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r69/three.min.js"></script>
+    <script src="js/webvr.js"></script>
+</head>
+<body>
+
+<section style='position: relative; z-index: 2;'>
+    <button id="vrBtn">Activate Oculus Rift!</button>
+    <div id="vrErrorText"><p>It looks like your browser does not support WebVR.</p>
+    <p>Please download an experimental
+    <a href="https://drive.google.com/folderview?id=0BzudLt22BqGRbW9WTHMtOWMzNjQ&usp=sharing#list">Chrome</a>
+    build with WebVR support. This Chrome build works for me on OS X 10.9. I was not able to find a Firefox
+    build that was working for me.</p>
+    <p>If you run into any trouble please consider to open an issue on <a href="https://githubtodo">Github</a></p>.
+    </div>
+</section>
+
+<script type="text/javascript">
+
+function BuildScene()
+{
+    var scene = new THREE.Scene();
+    var geometry = new THREE.BoxGeometry( 2, 2, 2 );
+    var material = new THREE.MeshBasicMaterial( {color: 0xff3300} );
+    var mesh = new THREE.Mesh( geometry, material );
+    mesh.position.z = -10;
+    mesh.position.x = 2;
+    scene.add( mesh );
+    return scene;
+}
+
+var VR_DEVICE = null;
+var renderTargetWidth = null;
+var renderTargetHeight = null;
+var VR_BASE_POSITION = new THREE.Vector3();
+var VR_BASE_ROTATION = new THREE.Quaternion();
+var VR_POSITION_SCALE = 1;
+
+var MONO_CAM = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+var VR_CAM_LEFT = new THREE.PerspectiveCamera();
+var VR_CAM_RIGHT = new THREE.PerspectiveCamera();
+
+var CAMERA_PIVOT = new THREE.Object3D();
+CAMERA_PIVOT.add(VR_CAM_LEFT);
+CAMERA_PIVOT.add(VR_CAM_RIGHT);
+CAMERA_PIVOT.add(MONO_CAM)
+
+var SCENE = BuildScene();
+SCENE.add(CAMERA_PIVOT);
+
+var RENDERER = new THREE.WebGLRenderer();
+RENDERER.setClearColor(0xEAEAEA, 1.0);
+
+
+GetVRDevices(function(devices) {
+    VR_DEVICE = FindFirstVRDevice(devices);
+
+    var leftEyeViewport = VR_DEVICE.hmdDevice.getRecommendedEyeRenderRect('left');
+    var rightEyeViewport = VR_DEVICE.hmdDevice.getRecommendedEyeRenderRect('right');
+    renderTargetWidth = leftEyeViewport.width + rightEyeViewport.width;
+    renderTargetHeight = Math.max(leftEyeViewport.height, rightEyeViewport.height);
+
+    VR_CAM_LEFT.position.add(VR_DEVICE.hmdDevice.getEyeTranslation('left'));
+    VR_CAM_RIGHT.position.add(VR_DEVICE.hmdDevice.getEyeTranslation('right'));
+
+    VR_CAM_LEFT.projectionMatrix.elements = PerspectiveMatrixFromVRFieldOfView(
+        VR_DEVICE.hmdDevice.getRecommendedEyeFieldOfView('left'), 0.1, 1000
+    );
+    VR_CAM_RIGHT.projectionMatrix.elements = PerspectiveMatrixFromVRFieldOfView(
+        VR_DEVICE.hmdDevice.getRecommendedEyeFieldOfView('right'), 0.1, 1000
+    );
+
+    document.getElementById('vrErrorText').style.display = 'none';
+});
+
+
+function UpdateVirtualCameraWithVRSensorData(
+    sensorDevice, CAMERA_PIVOT, VR_BASE_POSITION, VR_BASE_ROTATION, scale
+) {
+    if (!scale) {
+        scale = 1;
+    }
+
+    var hmdRotation = new THREE.Quaternion();
+    var hmdPosition = new THREE.Vector3();
+    var vrState = sensorDevice.getState();
+    hmdRotation.copy(vrState.orientation);
+    hmdPosition.copy(vrState.position);
+
+    CAMERA_PIVOT.quaternion.multiplyQuaternions(VR_BASE_ROTATION, hmdRotation);
+    CAMERA_PIVOT.position.copy(VR_BASE_POSITION).add(hmdPosition.multiply(new THREE.Vector3(-scale, scale, -scale)));
+}
+
+
+function IsVRMode() {
+    return (document.webkitFullscreenElement || document.mozFullScreenElement);
+}
+
+
+function ResizeRenderer() {
+    if (IsVRMode()) {
+        RENDERER.setSize(renderTargetWidth, renderTargetHeight);
+    } else {
+        MONO_CAM.aspect = window.innerWidth / window.innerHeight;
+        MONO_CAM.updateProjectionMatrix();
+        RENDERER.setSize(window.innerWidth, window.innerHeight);
+    }
+}
+
+
+function Render(timestamp) {
+    if (IsVRMode()) {
+        // Update right and left eye according to VR orientation and position
+        var hmdRotation = new THREE.Quaternion();
+        var hmdPosition = new THREE.Vector3();
+        var vrState = VR_DEVICE.sensorDevice.getState();
+        hmdRotation.copy(vrState.orientation);
+        hmdPosition.copy(vrState.position);
+
+        CAMERA_PIVOT.quaternion.multiplyQuaternions(VR_BASE_ROTATION, hmdRotation);
+        CAMERA_PIVOT.position.copy(VR_BASE_POSITION).add(
+            hmdPosition.multiply(new THREE.Vector3(-VR_POSITION_SCALE, VR_POSITION_SCALE, -VR_POSITION_SCALE)));
+
+        // Render left eye
+        RENDERER.enableScissorTest(true);
+        RENDERER.setScissor(0, 0, renderTargetWidth / 2, renderTargetHeight);
+        RENDERER.setViewport(0, 0, renderTargetWidth / 2, renderTargetHeight);
+        RENDERER.render(SCENE, VR_CAM_LEFT);
+
+        // Render right eye
+        RENDERER.setScissor(renderTargetWidth / 2, 0, renderTargetWidth / 2, renderTargetHeight);
+        RENDERER.setViewport(renderTargetWidth / 2, 0, renderTargetWidth / 2, renderTargetHeight);
+        RENDERER.render(SCENE, VR_CAM_RIGHT);
+    } else {
+        // Render mono view
+        CAMERA_PIVOT.quaternion.copy(VR_BASE_ROTATION);
+        CAMERA_PIVOT.position.copy(VR_BASE_POSITION);
+
+        RENDERER.enableScissorTest(false);
+        RENDERER.setViewport(0, 0, window.innerWidth, window.innerHeight);
+        RENDERER.render(SCENE, MONO_CAM);
+    }
+    requestAnimationFrame(Render);
+}
+
+document.addEventListener('webkitfullscreenchange', ResizeRenderer, false);
+document.addEventListener('mozfullscreenchange', ResizeRenderer, false);
+document.body.appendChild(RENDERER.domElement);
+document.getElementById('vrBtn').addEventListener(
+    'click',
+    function(){ RequestFullscreen(RENDERER.domElement, VR_DEVICE); },
+    false
+);
+
+window.addEventListener('resize', ResizeRenderer, false);
+window.addEventListener('keydown', function(event) {
+    if (event.altKey) {
+        return;
+    }
+
+    var rotDelta = 0.1;
+    var transDelta = 1;
+
+    switch (event.keyCode) {
+        case 65: /*A*/ VR_BASE_POSITION.x -= transDelta; break;
+        case 68: /*D*/ VR_BASE_POSITION.x += transDelta; break;
+        case 69: /*E*/ VR_BASE_POSITION.y -= transDelta; break;
+        case 81: /*Q*/ VR_BASE_POSITION.y += transDelta; break;
+        case 87: /*W*/ VR_BASE_POSITION.z -= transDelta; break;
+        case 83: /*S*/ VR_BASE_POSITION.z += transDelta; break;
+
+        case 38: /*up*/   VR_BASE_ROTATION.x += rotDelta; break;
+        case 40: /*down*/ VR_BASE_ROTATION.x -= rotDelta; break;
+        case 37: /*left*/  VR_BASE_ROTATION.y += rotDelta; break;
+        case 39: /*right*/ VR_BASE_ROTATION.y -= rotDelta; break;
+
+        case 70: /*F*/ RequestFullscreen(RENDERER.domElement, VR_DEVICE); break;
+        case 82: /*R*/ VR_DEVICE.sensorDevice.zeroSensor(); break;
+    }
+});
+
+ResizeRenderer();
+Render();
+
+</script>
+
+</body>
+</html>

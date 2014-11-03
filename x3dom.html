@@ -1,0 +1,204 @@
+<html>
+<head>
+    <title>X3DOM WebVR Demo</title>
+    <meta http-equiv='Content-Type' content='text/html;charset=utf-8'/>
+    <meta http-equiv="X-UA-Compatible" content="chrome=1,IE=edge" />
+    <script type="text/javascript" src="http://www.x3dom.org/download/dev/x3dom.js"></script>
+    <script type="text/javascript" src="js/webvr.js"></script>
+    <link rel='stylesheet' type='text/css' href='http://www.x3dom.org/download/dev/x3dom.css'>
+</head>
+
+<body style='width:100%; height:100%; border:0; margin:0; padding:0;'>
+
+<x3d id='x3dElement' showStat='false' showLog='false' style='width:100%; height:100%; border:0; margin:0; padding:0;'>
+    <scene id='scene'>
+        <Environment frustumCulling="false"></Environment>
+        <OrthoViewpoint></OrthoViewpoint>
+        <NavigationInfo type='NONE'></NavigationInfo>
+        <background DEF='theBackground' skyColor="0.918 0.918 0.918"></background>
+        <group id='root' render='false'>
+            <group DEF='theScene'>
+                <Transform translation='-10 -2 0' />
+                    <shape>
+                    <appearance>
+                        <material diffuseColor='0.603 0.894 0.909' ></material>
+                    </appearance>
+                    <box DEF='box' ></box>
+                    </shape>
+                </Transform>
+            </group>
+        </group>
+        <group render="true">
+            <group def='left'>
+                <Transform id="transformLeft" translation='-0.8 0 0' scale='1 1 1' />
+                    <shape>
+                        <appearance>
+                            <renderedtexture id="textureLeft" update='ALWAYS' repeatS='false' repeatT='false'>
+                                <viewpoint id='vrCamLeft'></viewpoint>
+                                <background use='theBackground'></background>
+                                <group use='theScene' containerfield="scene"></group>
+                            </renderedtexture>
+                        </appearance>
+                        <plane solid="false"></plane>
+                    </shape>
+                </Transform>
+            </group>
+            <group def='right'>
+                <Transform id="transformRight" translation='0.8 0 0' scale='1 1 1' />
+                    <shape>
+                        <appearance>
+                            <renderedtexture id="textureRight" update='ALWAYS' repeatS='false' repeatT='false'>
+                                <viewpoint id='vrCamRight'></viewpoint>
+                                <background use='theBackground'></background>
+                                <group use='theScene' containerfield="scene"></group>
+                            </renderedtexture>
+                        </appearance>
+                        <plane solid="false"></plane>
+                    </shape>
+                </Transform>
+            </group>
+        </group>
+    </scene>
+</x3d>
+
+<section style='position:absolute; top:10px; left:10px;'>
+    <button id="vrBtn">Activate Oculus Rift!</button>
+    <div id="vrErrorText"><p>It looks like your browser does not support WebVR.</p>
+    <p>Please download an experimental
+    <a href="https://drive.google.com/folderview?id=0BzudLt22BqGRbW9WTHMtOWMzNjQ&usp=sharing#list">Chrome</a>
+    build with WebVR support. This Chrome build works for me on OS X 10.9. I was not able to find a Firefox
+    build that was working for me.</p>
+    <p>If you run into any trouble please consider to open an issue on <a href="https://github.com/larsxschneider/webvr-examples/issues">Github</a></p>.
+    </div>
+</section>
+
+<script type="text/javascript">
+
+var VR_DEVICE = null;
+var VR_BASE_POSITION = new x3dom.fields.SFVec3f(0,10,-10);
+var VR_BASE_ROTATION = new x3dom.fields.Quaternion();
+var VR_POSITION_SCALE = 1;
+var VR_LEFT_EYE_TRANSLATION = null;
+var VR_RIGHT_EYE_TRANSLATION = null;
+var VR_LEFT_EYE_PROJECTION = null;
+var VR_RIGHT_EYE_PROJECTION = null;
+
+
+GetVRDevices(function(devices) {
+    VR_DEVICE = FindFirstVRDevice(devices);
+
+    var textureLeft = document.getElementById('textureLeft');
+    var textureRight = document.getElementById('textureRight');
+    var transformLeft = document.getElementById('transformLeft');
+    var transformRight = document.getElementById('transformRight');
+
+    // TODO:
+    // WebVR applies the Oculus distortion on a screen size texture. It should apply the distortion on a much bigger
+    // texture as returned by "getRecommendedEyeRenderRect" to avoid artifacts.
+    var leftEyeViewport = {'width': screen.width/2, 'height': screen.height};
+    var rightEyeViewport = leftEyeViewport;
+    // var leftEyeViewport = VR_DEVICE.hmdDevice.getRecommendedEyeRenderRect('left');
+    // var rightEyeViewport = VR_DEVICE.hmdDevice.getRecommendedEyeRenderRect('right');
+
+    textureLeft.setAttribute('dimensions', leftEyeViewport.width + ' ' + leftEyeViewport.height);
+    textureRight.setAttribute('dimensions', rightEyeViewport.width + ' ' + rightEyeViewport.height);
+    transformLeft.setAttribute('translation', -leftEyeViewport.width/leftEyeViewport.height + ' 0 0');
+    transformRight.setAttribute('translation', rightEyeViewport.width/rightEyeViewport.height + ' 0 0');
+    transformLeft.setAttribute('scale', leftEyeViewport.width/leftEyeViewport.height + ' 1 1');
+    transformRight.setAttribute('scale', rightEyeViewport.width/rightEyeViewport.height + ' 1 1');
+
+    var leftEye = VR_DEVICE.hmdDevice.getEyeTranslation('left');
+    var rightEye = VR_DEVICE.hmdDevice.getEyeTranslation('right')
+    VR_LEFT_EYE_TRANSLATION = x3dom.fields.SFMatrix4f.translation(
+        new x3dom.fields.SFVec3f(leftEye.x, leftEye.y, leftEye.z)
+    );
+    VR_RIGHT_EYE_TRANSLATION = x3dom.fields.SFMatrix4f.translation(
+        new x3dom.fields.SFVec3f(rightEye.x, rightEye.y, rightEye.z)
+    );
+
+    VR_LEFT_EYE_PROJECTION = new x3dom.fields.SFMatrix4f();
+    VR_LEFT_EYE_PROJECTION.setFromArray(PerspectiveMatrixFromVRFieldOfView(
+        VR_DEVICE.hmdDevice.getRecommendedEyeFieldOfView('left'), 0.1, 1000
+    ));
+
+    VR_RIGHT_EYE_PROJECTION = new x3dom.fields.SFMatrix4f();
+    VR_RIGHT_EYE_PROJECTION.setFromArray(PerspectiveMatrixFromVRFieldOfView(
+        VR_DEVICE.hmdDevice.getRecommendedEyeFieldOfView('right'), 0.1, 1000
+    ));
+});
+
+
+document.getElementById('vrBtn').addEventListener(
+    'click',
+    function(){ RequestFullscreen(document.getElementsByTagName('canvas')[0], VR_DEVICE); },
+    false
+);
+
+
+document.onload = function ()
+{
+    var runtime = document.getElementById('x3dElement').runtime;
+    var vrCamLeft = document.getElementById('vrCamLeft');
+    var vrCamRight = document.getElementById('vrCamRight');
+
+    runtime.enterFrame = function () {
+        var state = VR_DEVICE.sensorDevice.getState();
+
+        vrCamLeft._x3domNode._projMatrix = VR_LEFT_EYE_PROJECTION.copy();
+        vrCamRight._x3domNode._projMatrix = VR_RIGHT_EYE_PROJECTION.copy();
+
+        var riftTranslation = x3dom.fields.SFMatrix4f.translation(
+            VR_BASE_POSITION.add(new x3dom.fields.SFVec3f(
+                -VR_POSITION_SCALE * state.position.x,
+                +VR_POSITION_SCALE * state.position.y,
+                -VR_POSITION_SCALE * state.position.z
+            ))
+        );
+
+        var riftRotation = VR_BASE_ROTATION.multiply(new x3dom.fields.Quaternion(
+            state.orientation.x, -state.orientation.y, state.orientation.z, state.orientation.w
+        ));
+
+        vrCamLeft._x3domNode._viewMatrix =
+            VR_LEFT_EYE_TRANSLATION.mult(riftRotation.toMatrix().mult(riftTranslation));
+        vrCamRight._x3domNode._viewMatrix =
+            VR_RIGHT_EYE_TRANSLATION.mult(riftRotation.toMatrix().mult(riftTranslation));
+    };
+
+    runtime.exitFrame = function ()
+    {
+        runtime.triggerRedraw();
+    };
+};
+
+
+window.addEventListener('keydown', function(event) {
+    if (event.altKey) {
+        return;
+    }
+
+    var rotDelta = 0.1;
+    var transDelta = 1;
+
+    switch (event.keyCode) {
+        case 65: /*A*/ VR_BASE_POSITION.x -= transDelta; break;
+        case 68: /*D*/ VR_BASE_POSITION.x += transDelta; break;
+        case 69: /*E*/ VR_BASE_POSITION.y -= transDelta; break;
+        case 81: /*Q*/ VR_BASE_POSITION.y += transDelta; break;
+        case 87: /*W*/ VR_BASE_POSITION.z -= transDelta; break;
+        case 83: /*S*/ VR_BASE_POSITION.z += transDelta; break;
+
+        case 38: /*up*/   VR_BASE_ROTATION.x += rotDelta; break;
+        case 40: /*down*/ VR_BASE_ROTATION.x -= rotDelta; break;
+        case 37: /*left*/  VR_BASE_ROTATION.y += rotDelta; break;
+        case 39: /*right*/ VR_BASE_ROTATION.y -= rotDelta; break;
+
+        case 70: /*F*/ RequestFullscreen(document.getElementsByTagName('canvas')[0], VR_DEVICE); break;
+        case 82: /*R*/ VR_DEVICE.sensorDevice.zeroSensor(); break;
+    }
+});
+
+</script>
+
+</body>
+</html>
